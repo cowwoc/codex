@@ -164,3 +164,49 @@ fn em_dash_and_space_word_wrap() {
         "word 'inside' should not be split across lines:\n{joined}"
     );
 }
+
+#[test]
+fn incremental_stream_history_keeps_all_numbered_lines() {
+    // Match the real chat behavior: small inline viewport at the bottom and
+    // one history insertion per commit tick.
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 24, /*width*/ 120, /*height*/ 1,
+    );
+    let mut scenario = TestScenario::new(/*width*/ 120, /*height*/ 25, area);
+
+    for i in 1..=40 {
+        scenario.run_insert(vec![format!("FILLER-{i:04}").into()]);
+    }
+    for i in 1..=400 {
+        scenario.run_insert(vec![format!("S-{i:04}").into()]);
+    }
+
+    let rows = scenario.term.backend().vt100().screen().contents();
+    let mut seen = Vec::new();
+    for line in rows.lines() {
+        if let Some(rest) = line.strip_prefix("S-")
+            && rest.len() == 4
+            && rest.chars().all(|ch| ch.is_ascii_digit())
+        {
+            seen.push(rest.parse::<u16>().expect("valid S-#### suffix"));
+        }
+    }
+
+    // A vt100 screen model only retains the visible area. We only assert that the
+    // visible S-lines form a contiguous tail with no missing mid-sequence rows.
+    let mut sorted = seen.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert!(
+        sorted.len() >= 20,
+        "expected to retain a visible tail of S-lines, got {sorted:?}\nrows:\n{rows}"
+    );
+    let expected_start = sorted[0];
+    let expected_end = *sorted.last().expect("non-empty");
+    let expected_len = (expected_end - expected_start + 1) as usize;
+    assert_eq!(
+        sorted.len(),
+        expected_len,
+        "expected contiguous visible S-line tail but found a gap: {sorted:?}\nrows:\n{rows}"
+    );
+}
